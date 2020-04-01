@@ -69,7 +69,7 @@ def mcrun():
   W= 300e-6
   maxscats=15000000     #maximum number of scattering events 
   tstop=1000.0e-9       #max time for simulation in seconds
-  incycles =100000       #number of electrons for each TBU value (should be multiple of 6 for equal valley distribution)
+  incycles =1000       #number of electrons for each TBU value (should be multiple of 6 for equal valley distribution)
 
   #Natural and material constants
   me=9.10953e-31 #electron mass in kg
@@ -207,7 +207,7 @@ def mcrun():
     #ind = np.lexsort((pos[:,0],pos[:,3]), axis=0) # borde vara på alla
     #pos = pos[ind,:]
     #N   = N[ind]
-    #NN = Electron_muching(bins_z,bins_t,bins_xy,n_n_s,pos[:,1].size,pos,N,M2)
+    #NN = electron_smoothing(bins_z,bins_t,bins_xy,n_n_s,pos[:,0].size,pos,N,M2)
 
     ##E_field = np.zeros(bins_t*bins_z*bins_xy**2*3+4)
     ##E_field[bins_t*bins_z*bins_xy**2*3:] = np.array([bins_xy,bins_z,bins_t,W])
@@ -216,18 +216,19 @@ def mcrun():
     #XY_m = [bins_xy for x in range(bins_t)]
     #n_n_m = [n_n_s for x in range(bins_t)]
     #NN_m = [NN[x,:,:,:] for x in range(bins_t)]
+    #ratio_m = [L/W for x in range(bins_t)]
 
-    #mapper = poolen.map(Efind,list(zip(*[T_m,Z_m,XY_m,n_n_m,NN_m])))  
+    #mapper = poolen.map(Efind,list(zip(*[T_m,Z_m,XY_m,n_n_m,NN_m,ratio_m])))  
     #RRR = list(mapper)   #this is the outdata from inloop6 (fortran)
     #EE = np.stack(RRR, axis=0)
 
     ##X = mp.RawArray('d', int(bins_t*bins_z*bins_xy**2*3+4))
     #X_np = np.frombuffer(X, dtype=np.float64) #.reshape(X_shape)
     ##np.copyto(X_np, E_field)
-    #np.copyto(X_np, np.append( np.reshape(EE*100, (1,-1),order='F' ) , np.array([bins_xy,bins_z,bins_t,W]) ) ) #50000000/incycles
+    #np.copyto(X_np, np.append( np.reshape(EE*10000000/incycles, (1,-1),order='F' ) , np.array([bins_xy,bins_z,bins_t,W]) ) ) #50000000/incycles
 ############################################################################################################################################
     
-    for run in range(6): #V2.0
+    for run in range(10): #V2.0
         print(run)
         s_tid = tm.time()
         mapper = poolen.map(multi_run_wrap,list(zip(*[Ls,TLs,Es,Bs,Xids,Xius,tstops,scatss,ints,autos,valleys,Gammamax,])))  
@@ -262,9 +263,10 @@ def mcrun():
         III = (N > 0) # ta bort alla små väden
         pos = pos[III ,:]
         N   = N[III]
+        #print(N.size) 
         pos_end = pos[(pos[:,0] > bins_z-1),:]
         N_end = N[(pos[:,0] > bins_z-1)]
-
+        #print(N_end.size) Är inte alltid lika med incykle?? vet inte varför
 
 #######################################################################
         k = 0
@@ -274,7 +276,7 @@ def mcrun():
         ## lägger till att electronerna att the end 
         pos_e = np.zeros([k,4])
         N_e = np.zeros(k)
-        part_e_Nv = 0.5 # part of electrons that hits Nv center
+        part_e_Nv = 0.1 # part of electrons that hits Nv center
         f = 0
         for i in range(pos_end[:,0].size):
             for j in range(int(pos_end[i,3]),int(bins_t)):
@@ -294,7 +296,7 @@ def mcrun():
 
         b_tid = tm.time()
 
-        ratio_add = 0.3
+        ratio_add = 0.02
         NN  = (1-ratio_add)*NN + ratio_add*electron_smoothing(bins_z,bins_t,bins_xy,n_n_s,pos[:,0].size,pos,N,M2)
 
         s_tid = tm.time()
@@ -327,16 +329,17 @@ def mcrun():
         
         
         X_np = np.frombuffer(X, dtype=np.float64) #.reshape(X_shape)
-        np.copyto(X_np, np.append( np.reshape(EE*10000000/incycles, (1,-1),order='F' ) , np.array([bins_xy,bins_z,bins_t,W]) ) ) 
+        np.copyto(X_np, np.append( np.reshape(EE*1e8/incycles, (1,-1),order='F' ) , np.array([bins_xy,bins_z,bins_t,W]) ) ) 
         np.savetxt('Pos_end'+str(run)+'.txt',pos_raw)
 
-    
+####################################################################################################################    
     # nearest = np.argsort(np.sum((Y[:,np.newaxis, :]-Y[np.newaxis,:, :]) ** 2, axis=-1), axis=1) https://jakevdp.github.io/PythonDataScienceHandbook/02.08-sorting.html 
     np.savetxt('Pos_end.txt',pos_raw)
     #np.savetxt('NN.txt',np.reshape(NN, (-1,1)))
     #np.savetxt('pos_all.txt',np.reshape(pos, (-1,1)))
     #np.savetxt('Pos_end'+'.txt',pos_raw)
 
+########################################################################################################################
     #fancy way of summing squares (which I no longer understand, but it works (!)
     sq = lambda x:[y**2 for y in x]
     xsqtotinval  = [sum(y) for y in zip(*[sq(x) for x in list(zip(*resultlist))[0]])]
