@@ -20,7 +20,8 @@ gmax = np.zeros(1)
 TBU_check = np.zeros(3)
 def multi_run_wrap(a):    #    
     """
-    collects all arguments for inloop6 into one (technicality to make paralell processing routine poolen.map work)
+    collects all arguments for inloop6 into one (technicality to make paralell 
+    processing routine poolen.map work)
 
     Parameters
     ----------
@@ -30,8 +31,8 @@ def multi_run_wrap(a):    #
         
     Returns
     -------
-    gammamax: flaot
-    gmax for the parameters i  a
+    : list
+    [xtotinval,ttotinval,Ettot,xinttot,xvtot,jz2,Pos]
     """
     
     #X_np      = np.frombuffer(Efield) # V2.0
@@ -138,8 +139,18 @@ def initProcess(share):
   Efield = share
 @profile
 def mcrun():
-  intervalley_scattering = 0 #0 = intervalley scattering OFF, 1= intervalley scattering ON
-  autogammacorrect = 3000 #1000 #3000 # # scatterings to correct value of gamma, =0 means autocorrect off
+    '''
+    Monte Carlo simulation for electrons with ADP and intervalley scattering.
+    Set parameters between line 155 and 190.
+    Returns
+    -------
+    None.
+
+    '''
+  intervalley_scattering = 0 #0 = intervalley scattering OFF, 1= intervalley 
+  # scattering ON
+  autogammacorrect = 3000 #1000 #3000 # # scatterings to correct value of
+  #gamma, =0 means autocorrect off
                 
   L=300e-6              #sample thickness (or large value for "infinite" thickness)
   W= 300e-6
