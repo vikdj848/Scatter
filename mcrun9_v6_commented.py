@@ -4,20 +4,35 @@
 
 import datetime                        #used in filenames
 import numpy as np                     #standard math library
-from defineheader import defineheader  #defineheader.py creates a header for ToF-gui readable files
-from MCinloop6 import inloop6          #inloop6 is the fast fortran scattering code using f2py
-from MCinloop6 import gammamaxfind 
-from MCinloop6 import efieldfind  
-from MCinloop6 import emuching   
+#from defineheader import defineheader  #defineheader.py creates a header for ToF-gui readable files
+# from MCinloop6 import inloop6          #inloop6 is the fast fortran scattering code using f2py
+# from MCinloop6 import gammamaxfind 
+# from MCinloop6 import efieldfind  
+# from MCinloop6 import emuching   
 import multiprocessing as mp           #for paralell processing
 import matplotlib.pyplot as plt        #for plotting
 import time as tm                      #to record total execution time
-from scipy.spatial import ckdtree
-from scipy.spatial import distance 
+from memory_profiler import profile
+#from scipy.spatial import ckdtree
+#from scipy.spatial import distance 
 
 gmax = np.zeros(1)
 TBU_check = np.zeros(3)
-def multi_run_wrap(a):    #collects all arguments for inloop6 into one (technicality to make paralell processing routine poolen.map work)
+def multi_run_wrap(a):    #    
+    """
+    collects all arguments for inloop6 into one (technicality to make paralell processing routine poolen.map work)
+
+    Parameters
+    ----------
+    a : list 
+    [length m, temp K, Efield V/m, bfield T, Xid, xiu,
+    tstop s, maxscats, intevally scatter 1 or 0, gmax=0, which vally 1-6]
+        
+    Returns
+    -------
+    gammamax: flaot
+    gmax for the parameters i  a
+    """
     
     #X_np      = np.frombuffer(Efield) # V2.0
     bins_t    = int(np.frombuffer(Efield)[-2])  #number of temporal bins to record current data in # NEEDS  FIXING, NOW I HAVE TO SPECIFY BINS AT 3 DIFFERENT PLACES
@@ -29,38 +44,99 @@ def multi_run_wrap(a):    #collects all arguments for inloop6 into one (technica
     xinttot   = np.zeros(6)
     xvtot     = np.zeros(6)
     jz2       = np.zeros(bins_t)  # FIX THIS
-    Pos       = np.zeros([bins_t*4])  # FIX THIS v2.0
+    Pos       = np.zeros([bins_t*4])
+    Pos       = np.random.random(bins_t*4)# FIX THIS v2.0
     E_field = np.reshape(np.frombuffer(Efield)[0:bins_t*bins_z*bins_xy*bins_xy*3], (bins_t,bins_z,bins_xy,bins_xy,3),order = 'F') #np.zeros([100,100,29,29,3]) 
     #s_tid = tm.time()
-    inloop6(*a,xtotinval,ttotinval,Ettot,xinttot,xvtot,jz2,Pos,E_field) # Pos in V2.0   
+    #inloop6(*a,xtotinval,ttotinval,Ettot,xinttot,xvtot,jz2,Pos,E_field) # Pos in V2.0   
     #b_tid = tm.time()
     #print('Elapsed time scatt_in: ', b_tid-s_tid)
     return([xtotinval,ttotinval,Ettot,xinttot,xvtot,jz2,Pos]) # Pos in V2.0
 
 def gmax(a):
+    """
+    gmax estimates gmax for the list of paramters in a
+
+    Parameters
+    ----------
+    a : list of varibles [length m, temp K, Efield V/m, bfield T, Xid, xiu,
+    tstop s, maxscats, intevally scatter 1 or 0, gmax=0, which vally 1-6]
+        
+    Returns
+    -------
+    gammamax: flaot
+    gmax for the parameters i  a
+
+    """
     gammamax  = np.zeros(1)
-    gammamaxfind(*a,gammamax)
+    #gammamaxfind(*a,gammamax)
     return(gammamax)
 
 def Efind(a):
-    Efield  = np.zeros([100,29,29,3],order='F')
-    efieldfind(*a,Efield)
+    '''
+    Take a list with the electrons pos and givs back the eletric field from 
+    electrons using a fortran script 
+
+    Parameters
+    ----------
+    a :list
+        [t_bin,z_bin,xy_bin,extend_number,electron_pos_matrix,L/W]
+
+    Returns
+    -------
+    Efield: np.array
+    electrifield matrix [z_bin,xy_bin,xy_bin,3] 
+
+    '''    
+    
+    Efield  = np.zeros([100,29,29,3],order='F') # hårdkodat
+    #efieldfind(*a,Efield)
     return(Efield)
 
 def electron_smoothing(bins_z,bins_t,bins_xy,n_n_s,Pos_size,Pos,N,M):
+    '''
+    takes a list of all postions of the electrons and put them the right
+    in a matrix form 
+    
+    Parameters
+    ----------
+    bins_z : int
+        DESCRIPTION.
+    bins_t : int
+        DESCRIPTION.
+    bins_xy : int
+        DESCRIPTION.
+    n_n_s : int
+        DESCRIPTION.
+    Pos_size : int
+        number of uesed postions
+    Pos : np.array
+        [:,4] array with all the postions of electron
+    N : np.array
+        [:] number of electrons in each position
+    M : np.array
+        [n_n_s*2+1,n_n_s*2+1,n_n_s*2+1], describes the smoothing
+
+    Returns
+    -------
+    NN : np.array
+    matrix which describes the simulated space with number of electrons 
+    in each subspace
+    
+    '''    
     NN  = np.zeros([bins_t,bins_z+n_n_s*2,bins_xy+n_n_s*2,bins_xy+n_n_s*2],order='F')
     pos  = np.zeros([bins_t*bins_z*bins_xy*bins_xy,4],order='F')
     n = np.zeros([bins_t*bins_z*bins_xy*bins_xy],order='F')
     pos[:Pos_size,:] = Pos
     n[:Pos_size] = N
     M = np.asfortranarray(M)
-    emuching(n_n_s,Pos_size,pos,n,NN,M)
+    #emuching(n_n_s,Pos_size,pos,n,NN,M)
     return(NN)
 
 def initProcess(share):
   global Efield
   Efield = share
-
+@profile
 def mcrun():
   intervalley_scattering = 0 #0 = intervalley scattering OFF, 1= intervalley scattering ON
   autogammacorrect = 3000 #1000 #3000 # # scatterings to correct value of gamma, =0 means autocorrect off
@@ -69,7 +145,7 @@ def mcrun():
   W= 300e-6
   maxscats=15000000     #maximum number of scattering events 
   tstop=1000.0e-9       #max time for simulation in seconds
-  incycles =1000       #number of electrons for each TBU value (should be multiple of 6 for equal valley distribution)
+  incycles =12       #number of electrons for each TBU value (should be multiple of 6 for equal valley distribution)
 
   #Natural and material constants
   me=9.10953e-31 #electron mass in kg
@@ -79,8 +155,6 @@ def mcrun():
   mt=0.19*me
   m = np.array(( (ml, mt, mt), (ml, mt, mt), (mt, ml, mt), (mt, ml, mt), (mt, mt, ml), (mt, mt, ml) ),float) #array with masses in (x,y,z) direction for each valley
   
-
-
   # create bins
   bins_z = 100
   bins_xy = 29
@@ -94,8 +168,6 @@ def mcrun():
   tmid=np.linspace(mint+deltat/2, maxt-deltat/2, bins_t)  # time vector with "middle time" of each bin
   time = np.concatenate([np.linspace(mint+deltat/2-extrabaselinezeros*deltat, mint-deltat/2, extrabaselinezeros), tmid]) # extend time vector for ToFGUI
 
-
-  
   #Building an array called TBU with which T=Temperature (Kelvin), B=Magnetic field (Tesla), U=Bias voltage (Volts) values to use
   count=0     #a counter for the total number of (T,B,U) multiplets
   TBU=[]
@@ -113,12 +185,12 @@ def mcrun():
   datamatrix[:,0] = time                    #write time vector to first column of datamatrix
   
   # open two files  with unique filenames including date and time
-  now = str(datetime.datetime.now())
-  now2 = now.replace(":",".") #because we cannot have colons in filenames
-  exportfilename="MC_ToF_Export_" + now2 + ".txt"             #datamatrix will be written to this file
-  velocityfilename="MC_ToF_Export_Velocity_" + now2 + ".txt"  #velmatrix will be written to this file
-  outputformat_velocity = '%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g'
-  outputformat, headerstring = defineheader(TBU)  #uses defineheader.py
+  # now = str(datetime.datetime.now())
+  # now2 = now.replace(":",".") #because we cannot have colons in filenames
+  # exportfilename="MC_ToF_Export_" + now2 + ".txt"             #datamatrix will be written to this file
+  # velocityfilename="MC_ToF_Export_Velocity_" + now2 + ".txt"  #velmatrix will be written to this file
+  # outputformat_velocity = '%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g\t%5.5g'
+  # outputformat, headerstring = defineheader(TBU)  #uses defineheader.py
 
   #make a place to store the electric field vector V2.0
   #E_field = np.zeros([100,100,29,29,3])
@@ -131,7 +203,7 @@ def mcrun():
 
   
   #define one parallel process for each cpu
-  workers = mp.cpu_count()    
+  workers = 2 #mp.cpu_count()    
   poolen = mp.Pool(workers, initializer= initProcess, initargs = (X,)) # V2.0
 
 
@@ -228,7 +300,7 @@ def mcrun():
     #np.copyto(X_np, np.append( np.reshape(EE*10000000/incycles, (1,-1),order='F' ) , np.array([bins_xy,bins_z,bins_t,W]) ) ) #50000000/incycles
 ############################################################################################################################################
     
-    for run in range(10): #V2.0
+    for run in range(3): #V2.0
         print(run)
         s_tid = tm.time()
         mapper = poolen.map(multi_run_wrap,list(zip(*[Ls,TLs,Es,Bs,Xids,Xius,tstops,scatss,ints,autos,valleys,Gammamax,])))  
@@ -360,18 +432,18 @@ def mcrun():
                           sum(xinttot[0:4]), sum(xinttot[4:6]),sum(xvtot[0:4]), sum(xvtot[4:6])  ]) 
     
     #save current vector to datamatrix
-    datamatrix[:,outloop+1] = np.array(np.concatenate((np.zeros(extrabaselinezeros), jz2)))
-    with open(exportfilename,"w") as fid:           # open file for overwriting data
-         fid.write(headerstring)         # write header to exportfile
-         for row in range(datamatrix.shape[0]):
-             print(outputformat % tuple(datamatrix[row,:]), file=fid)
+    # datamatrix[:,outloop+1] = np.array(np.concatenate((np.zeros(extrabaselinezeros), jz2)))
+    # with open(exportfilename,"w") as fid:           # open file for overwriting data
+    #      fid.write(headerstring)         # write header to exportfile
+    #      for row in range(datamatrix.shape[0]):
+    #          print(outputformat % tuple(datamatrix[row,:]), file=fid)
 
 
-    # save velocity data
-    with open(velocityfilename,"w") as fv:           # open file for overwriting data
-        fv.write('T \t B \t U \t E(V/cm) \t hot_v(cm/s) \t cool_v(cm/s) \t t_hot \t t_cool \t x_hot \t x_cool \t x_hot^2 \t x_cool^2 \t hot_TC \t cool_TC \t Xid (eV) \t Xiu (eV) \n')
-        for row in range(velmatrix2.shape[0]):
-            print(outputformat_velocity % tuple(velmatrix2[row,:]), file=fv);  # write velocitymatrix to exportfile
+    # # save velocity data
+    # with open(velocityfilename,"w") as fv:           # open file for overwriting data
+    #     fv.write('T \t B \t U \t E(V/cm) \t hot_v(cm/s) \t cool_v(cm/s) \t t_hot \t t_cool \t x_hot \t x_cool \t x_hot^2 \t x_cool^2 \t hot_TC \t cool_TC \t Xid (eV) \t Xiu (eV) \n')
+    #     for row in range(velmatrix2.shape[0]):
+    #         print(outputformat_velocity % tuple(velmatrix2[row,:]), file=fv);  # write velocitymatrix to exportfile
 
   #end of outloop
   
