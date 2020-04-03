@@ -67,15 +67,15 @@ subroutine inloop6(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,autogamma
     
     real (kind=dbl), dimension(6,3,3) :: Tm, Tminv  !Heering-Voigt matrix and its inverse (ISSUE: Tm does not seem to be used, Tminv is used in intervalley scattering but the definition has disappeared in this verson)
 	integer, dimension(6,3,3) :: Pm  !six 3x3 permutation (rotation) matrices going from (x,y,z) to "(t,t,l)" 
-    integer :: i,vali,errors,bin,valdum, binprev,j,ind, binz, binx, biny,P1,P2,P3 !various looping variables
+    integer :: i,vali,errors,bin,valdum,j,ind, binz, binx, biny,P1,P2,P3, binprev,k !various looping variables
     integer, dimension(8) :: scatstat !collects scattering statistics (for diagnostics only)
     real (kind=dbl),parameter :: mint = -2e-9           ! v2.0   before -30.0e-9      ! first travel time
     real (kind=dbl),parameter :: maxt = 20.0e-9      ! maximum travel time
     real (kind=dbl),parameter :: deltat =(maxt-mint)/bins; !width of the bins
         
 	real (kind=dbl):: kT !kB*TL
-    real (kind=dbl)  :: tmp,t,maxXi2,C1,C3,DA,tprev
-    real (kind=dbl),dimension(3) :: x,p,xprev,E
+    real (kind=dbl)  :: tmp,t,maxXi2,C1,C3,DA,tprev, t_at_bin
+    real (kind=dbl),dimension(3) :: x,p,xprev,E, x_at_bin,pprev
     integer, dimension(3) :: P23
     real (kind=dbl):: maxen, gamma_guess, gammamax, gammamax_1, gammamax_2, toterrmargin, toterr, tau0, tau1, tau2, tc, kmax_low, kmax_mid, test
     real (kind=dbl):: En, errmargin
@@ -135,7 +135,8 @@ subroutine inloop6(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,autogamma
     t=0.0;		!alternatively t=3/2.4*1e-9*np.random.normal() gives Gaussian distributed start time (emulating 3 ns laser pulse) ***Python remnant revrite to Fortran before use
 				!x(3)=-3e-6*log(np.random.random()) !Exponentially distributed z-start emulating 3um penetration depth ***Python remnant revrite to Fortran before use
     i=0			!counter incremented for each scattering 
-    binprev = 0
+    bin = 0
+    binprev = max(1,min(1+int( (t-mint)/deltat ), bins))
     E(1) = 0
     E(2) = 0
     E(3) = Ez
@@ -145,6 +146,7 @@ subroutine inloop6(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,autogamma
     	i = i + 1
         xprev = x		! keep current x coordinate
 		tprev = t		! keep current time
+        pprev = p
         !print *, E
         call Scatter6(TL,E,B,t,x,p,val,En,errmargin) !perform one scattering event, updating t,x,p,val,En,errmargin
         toterrmargin = max(toterrmargin,errmargin) !a max function for the error margin, for diagnostics only
@@ -161,11 +163,14 @@ subroutine inloop6(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,autogamma
                 !E_field_matrix(position(i,1)+1,position(i,2)+1,position(i,3)+1,3) = E_field(i,3)
            ! end do
         !endif
+        
+        
 		N(bin) = N(bin) + 1         ! N = number of events in bin
 		Nx(bin) = Nx(bin) + x(3)	! Nx = total z-distance traversed in bin
 		Nt(bin) = Nt(bin) + t		 ! used in current computation
 		Nxt(bin) = Nxt(bin) + x(3)*t ! used in current computation
 		Ntt(bin) = Ntt(bin) + t**2   ! used in current computation
+        
         if( ABS(x(1))<W/2 .or. ABS(x(2))<W/2 ) then
             binz = int(min(max(x(3)/L*100,1.0),100.0))
             binx = int(min(max(x(1)/W*28,-14.0),14.0))
@@ -175,29 +180,26 @@ subroutine inloop6(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,autogamma
         !ind =  int(t_ind(bin+1)+1) +int(1+z_ind(bin*2+1,min(int(1+x(3)/L*1000),1000)) ) !varför +1 kolla att detta ger samma e_fält från båda.
         !E = Ez + E_field(int(t_ind(bin)+z_ind(bin,int(min(max(x(3)/L*200,1.0),200.0)) )+1)) 
         
-        E(1) = E_field(bin,binz,binx,biny,2)
-        E(2) = E_field(bin,binz,binx,biny,3)
-        E(3) = E_field(bin,binz,binx,biny,1) + Ez
+        
+        t_at_bin = (bin*deltat+mint - t)/deltat ! del av tiden som är i förgånde bin
+        E(1) = (1-t_at_bin)*E_field(bin,binz,binx,biny,2) + t_at_bin*E_field(bin-1,binz,binx,biny,2)
+        E(2) = (1-t_at_bin)*E_field(bin,binz,binx,biny,3) +t_at_bin*E_field(bin-1,binz,binx,biny,3)
+        E(3) = (1-t_at_bin)*E_field(bin,binz,binx,biny,1) + t_at_bin*E_field(bin-1,binz,binx,biny,1) + Ez
         
         
-!        print *, int(t_ind(bin)+z_ind(bin*2+1,binz )+1)
-!        print *, int(t_ind(bin)+z_ind(bin*2,binz )+1)
-        !do j = int(t_ind(bin)+z_ind(bin*2+1,binz )+1), int(t_ind(bin)+z_ind(bin*2,binz )+1) ! ska det vara pules 1??
-         !   if (position(j,2) .eq. binx) then
-          !      if (position(j,3) .eq. biny) then
-           !         E(1) =  E_field(j,2) 
-            !        E(2) =  E_field(j,3) 
-              !      E(3) = Ez + E_field(j,1) 
-                    !print *, E
-             !       exit    
-              !  endif
-           ! endif
-        !end do
-        !if (binprev /= bin) then
-        Pos(bin) = x(3)           ! take the position of the at the end of t bin. borde fixas till (V2.0)
-        Pos(bin+bins) = x(1)           ! take the time of the at the end of t bin. borde fixas till (V2.0)
-        Pos(bin+bins*2) = x(2)           ! take the time of the at the end of t bin. borde fixas till (V2.0)
-        Pos(bin+bins*3) = t           ! take the time of the at the end of t bin. borde fixas till (V2.0)
+        if (binprev .NE. bin) then
+            do k = 0, bin-binprev-1
+                t_at_bin = (binprev+k)*deltat+mint
+                x_at_bin = xprev + pprev(:)/m(val,:)*(t_at_bin-tprev)+ E*q/(2*m(val,:))*(t_at_bin-tprev)**2
+                !print *, x(3), x_at_bin(3)!, t_at_bin, t
+                !print *, bin
+                Pos(bin) = x_at_bin(3)           ! take the position of the at the end of t bin. borde fixas till (V2.0)
+                Pos(bin+bins) = x_at_bin(1)           ! take the time of the at the end of t bin. borde fixas till (V2.0)
+                Pos(bin+bins*2) = x_at_bin(2)           ! take the time of the at the end of t bin. borde fixas till (V2.0)
+                Pos(bin+bins*3) = t_at_bin           ! take the time of the at the end of t bin. borde fixas till (V2.0)
+                binprev = bin
+            enddo
+        endif
         !    binprev = bin
         !end if
         !if (x(3) == 0) print *, x(3) 
@@ -216,7 +218,12 @@ subroutine inloop6(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,autogamma
     Ettot = Ettot + Et
 	xinttot = xinttot + xint
 	xvtot = xvtot + xv
-
+    !save last pos
+    !print *, x(3)
+    Pos(bin) = x(3)           ! take the position of the at the end of t bin. borde fixas till (V2.0)
+    Pos(bin+bins) = x(1)           ! take the time of the at the end of t bin. borde fixas till (V2.0)
+    Pos(bin+bins*2) = x(2)           ! take the time of the at the end of t bin. borde fixas till (V2.0)
+    Pos(bin+bins*3) = t           ! take the time of the at the end of t bin. borde fixas till (V2.0)
  !     print *,scats,i,tau0   !for diagnostics
  !	   print *, scatstat(1:4) !for diagnostics
      
@@ -356,68 +363,68 @@ subroutine gammamaxfind(L,TL,Ez,B,Xid,Xiu,tmax,scats,intervalley_scattering,auto
     include 'scatter6sub.f90'
 end subroutine gammamaxfind
 
-subroutine efieldfind(t_bin,z_bin,xy_bin,n_n_s,N,L_over_W,E) BIND(C,NAME="efieldfind_")
+subroutine efieldfind(z_bin,xy_bin,L_over_W,N,E) BIND(C,NAME="efieldfind_")
     implicit none   !All variables need to be properly declared E,N,M,
-    integer,INTENT(IN) :: t_bin,z_bin,xy_bin,n_n_s,L_over_W
+    integer,INTENT(IN) :: z_bin,xy_bin,L_over_W
     integer :: t,z,x,y,i,j,k
     real (kind=8) :: dist, ratio
     real (kind=8),INTENT(INOUT) :: E(100,29,29,3)
-    real (kind=8),INTENT(IN), dimension(104,33,33) :: N
+    real (kind=8),INTENT(IN), dimension(100,29,29) :: N
     !real (kind=8),INTENT(IN), dimension(-3:3,-3:3,-3:3,3) :: M
     !real (kind=4),INTENT(IN), dimension(z_bin+n_n_s*2,xy_bin+n_n_s*2,xy_bin+n_n_s*2,t_bin) :: N
     !real (kind=4),INTENT(IN), dimension(n_n_s*2+1,n_n_s*2+1,n_n_s*2+1) :: M
     
      ratio = z_bin/xy_bin/L_over_W
-     do z = n_n_s+1, z_bin+n_n_s
-        do x = n_n_s+1, xy_bin+n_n_s
-            do y = n_n_s+1, xy_bin+n_n_s
+     do z = 1, z_bin
+        do x = 1, xy_bin
+            do y = 1, xy_bin
                 if (N(z,x,y) .NE. 0.0) then
-                    dist = E(z-n_n_s,x-n_n_s,y-n_n_s,3)
+                    dist = E(z,x,y,3)
                     do i = 1, z_bin
                         do j = 1, xy_bin
                             do k = 1, xy_bin
                                ! dist = sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 )) # testaatt utgå ifrån en punkt till alla andra punkter ha ett test för att ta bort on den är noll 
-                                E(i,j,k,3) = E(i,j,k,3) - ratio*N(z,x,y)*(y-n_n_s-k)/( (z-n_n_s-i)**2 + (ratio*(x-n_n_s-j))**2 +(ratio*(y-n_n_s-k))**2 )**1.5 !/sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 ))
+                                E(i,j,k,3) = E(i,j,k,3) - ratio*N(z,x,y)*(y-k)/( (z-i)**2 + (ratio*(x-j))**2 +(ratio*(y-k))**2 )**1.5 !/sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 ))
                             end do                         
                         end do                                    !print *, E(z,x,y,t,3)
                     end do
-                    E(z-n_n_s,x-n_n_s,y-n_n_s,3) = dist
+                    E(z,x,y,3) = dist
                 endif
             end do
         end do
      end do
-     do z = n_n_s+1, z_bin+n_n_s
-        do x = n_n_s+1, xy_bin+n_n_s
-            do y = n_n_s+1, xy_bin+n_n_s
+     do z = 1, z_bin
+        do x = 1, xy_bin
+            do y = 1, xy_bin
                 if (N(z,x,y) .NE. 0.0) then
-                    dist = E(z-n_n_s,x-n_n_s,y-n_n_s,2)
+                    dist = E(z,x,y,2)
                     do i = 1, z_bin
                         do j = 1, xy_bin
                             do k = 1, xy_bin
                                ! dist = sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 )) # testaatt utgå ifrån en punkt till alla andra punkter ha ett test för att ta bort on den är noll 
-                                E(i,j,k,2) = E(i,j,k,2) - ratio*N(z,x,y)*(x-n_n_s-j)/( (z-n_n_s-i)**2 + (ratio*(x-n_n_s-j))**2 +(ratio*(y-n_n_s-k))**2 )**1.5 !/sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 ))
+                                E(i,j,k,2) = E(i,j,k,2) - ratio*N(z,x,y)*(x-j)/( (z-i)**2 + (ratio*(x-j))**2 +(ratio*(y-k))**2 )**1.5 !/sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 ))
                             end do                         
                         end do                                    !print *, E(z,x,y,t,3)
                     end do
-                    E(z-n_n_s,x-n_n_s,y-n_n_s,2) = dist
+                    E(z,x,y,2) = dist
                 endif
             end do
         end do
      end do
-     do z = n_n_s+1, z_bin+n_n_s
-        do x = n_n_s+1, xy_bin+n_n_s
-            do y = n_n_s+1, xy_bin+n_n_s
+     do z = 1, z_bin
+        do x = 1, xy_bin
+            do y = 1, xy_bin
                 if (N(z,x,y) .NE. 0.0) then
-                    dist = E(z-n_n_s,x-n_n_s,y-n_n_s,1)
+                    dist = E(z,x,y,1)
                     do i = 1, z_bin
                         do j = 1, xy_bin
                             do k = 1, xy_bin
                                ! dist = sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 )) # testaatt utgå ifrån en punkt till alla andra punkter ha ett test för att ta bort on den är noll 
-                                E(i,j,k,1) = E(i,j,k,1) - N(z,x,y)*(z-n_n_s-i)/( (z-n_n_s-i)**2 + (ratio*(x-n_n_s-j))**2 +(ratio*(y-n_n_s-k))**2 )**1.5 !/sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 ))
+                                E(i,j,k,1) = E(i,j,k,1) - N(z,x,y)*(z-i)/( (z-i)**2 + (ratio*(x-j))**2 +(ratio*(y-k))**2 )**1.5 !/sqrt(real( (z-i)**2 + (x-j)**2 +(y-k)**2 ))
                             end do                         
                         end do                                    !print *, E(z,x,y,t,3)
                     end do
-                    E(z-n_n_s,x-n_n_s,y-n_n_s,1) = dist
+                    E(z,x,y,1) = dist
                 endif
             end do
         end do
@@ -443,17 +450,17 @@ subroutine efieldfind(t_bin,z_bin,xy_bin,n_n_s,N,L_over_W,E) BIND(C,NAME="efield
     !end do
 end subroutine efieldfind
 
-subroutine emuching(n_n_s,Pos_size,Pos,N,NN,M) BIND(C,NAME="emuching_")
+subroutine electronsmooth(Pos_size,Pos,N,NN) BIND(C,NAME="electronsmooth_")
     implicit none   !All variables need to be properly declared E,N,M,
-    integer,INTENT(IN) ::n_n_s,Pos_size
+    integer,INTENT(IN) ::Pos_size
     integer :: t,i,j,k,f
     integer ,INTENT(IN) :: Pos(100*100*29*29,4)
     real (kind=8) ,INTENT(IN) :: N(100*100*29*29)
-    real (kind=8),INTENT(INOUT), dimension(100,104,33,33) :: NN !dimension(100,104,-16:16,-16:16)
-    real (kind=8),INTENT(IN), dimension(-2:2,-2:2,-2:2) :: M
+    real (kind=8),INTENT(INOUT), dimension(100,100,29,29) :: NN !dimension(100,104,-16:16,-16:16)
+
     
     do t =1, Pos_size
-        NN(Pos(t,4)+1,Pos(t,1)+1+n_n_s,Pos(t,2)+14+1+n_n_s,Pos(t,3)+14+1+n_n_s) = NN(Pos(t,4)+1,Pos(t,1)+1+n_n_s,Pos(t,2)+14+1+n_n_s,Pos(t,3)+14+1+n_n_s) + N(t) ! fungerar inte längre NN är fel
+        NN(Pos(t,4)+1,Pos(t,1)+1,Pos(t,2)+14+1,Pos(t,3)+14+1) = NN(Pos(t,4)+1,Pos(t,1)+1,Pos(t,2)+14+1,Pos(t,3)+14+1) + N(t) ! fungerar inte längre NN är fel
         !print *, NN(Pos(t,4)+1,Pos(t,1)+1+n_n_s,Pos(t,2)+14+1+n_n_s,Pos(t,3)+14+1+n_n_s)
         !print *, t
         !print *, Pos(t,2)+14+1+n_n_s
@@ -498,4 +505,4 @@ subroutine emuching(n_n_s,Pos_size,Pos,N,NN,M) BIND(C,NAME="emuching_")
         !    end do    
         !end do
     end do
-end subroutine emuching
+end subroutine electronsmooth
