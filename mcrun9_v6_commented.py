@@ -8,7 +8,7 @@ from defineheader import defineheader  #defineheader.py creates a header for ToF
 from MCinloop6 import inloop6          #inloop6 is the fast fortran scattering code using f2py
 from MCinloop6 import gammamaxfind 
 from MCinloop6 import efieldfind  
-from MCinloop6 import emuching   
+from MCinloop6 import electronsmooth   
 import multiprocessing as mp           #for paralell processing
 import matplotlib.pyplot as plt        #for plotting
 import time as tm                      #to record total execution time
@@ -266,7 +266,7 @@ def electron_smoothing(Pos_size,Pos,N):
     n = np.zeros([sv.bins_t*sv.bins_z*sv.bins_xy*sv.bins_xy],order='F')
     n[:Pos_size] = N
     e_number_matrix  = np.zeros([sv.bins_t,sv.bins_z,sv.bins_xy,sv.bins_xy],order='F')
-    emuching(Pos_size,pos,n,e_number_matrix)
+    electronsmooth(Pos_size,pos,n,e_number_matrix)
     return(e_number_matrix)
 
 def initProcess(share):
