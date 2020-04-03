@@ -18,8 +18,151 @@ from memory_profiler import profile
 import scattervariables as sv
 
 gmax = np.zeros(1)
-TBU_check = np.zeros(3)
-#@profile
+
+@profile
+def mcrun():
+  '''
+  Monte Carlo simulation for electrons with ADP and intervalley scattering.
+  Set parameters between line 155 and 190.
+  Returns
+  -------
+  None.
+
+  '''
+
+  # create bins
+  bins_z  = sv.bins_z
+  bins_xy = sv.bins_xy
+  bins_t  = sv.bins_t    #number of temporal bins to record current data in # NEEDS  FIXING, NOW I HAVE TO SPECIFY BINS AT 3 DIFFERENT PLACES
+
+  #make a place to store the electric field vector V2.0
+  e_field = np.zeros(bins_t*bins_z*bins_xy**2*3)
+  raw_array = mp.RawArray('d', int(bins_t*bins_z*bins_xy**2*3))
+  raw_array_np = np.frombuffer(raw_array, dtype=np.float64) #.reshape(X_shape)
+  np.copyto(raw_array_np, e_field)
+
+  #define one parallel process for each cpu
+  workers = mp.cpu_count()    
+  poolen = mp.Pool(workers, initializer= initProcess, initargs = (raw_array,)) # V2.0
+
+  # calculates gmax for each vally
+  diffrent_cycles = 6
+  valleys = [1+(x%6) for x in range(diffrent_cycles)] # repeating 0,1,2,3,4,5 list
+  gmax_list = poolen.map(gmax,list(zip(*[valleys])))
+###################################################
+  start_time = tm.time()     #start counting cpu time
+  print('TL= ', sv.T_L, '   B= ', sv.B,'   U= ', sv.U,'   Xid= ', sv.Xid/sv.q,'   Xiu= ', sv.Xiu/sv.q) #to be able to follow the progress in the command window
+  jz2 = np.zeros(bins_t) # zero the current vector etc.
+  xtotinval = np.zeros(6); 
+  ttotinval = np.zeros(6); 
+  Ettot = np.zeros(6);
+  xinttot = np.zeros(6); 
+  xvtot = np.zeros(6)
+
+############################################################################################################
+  E_field = np.zeros([100,100,29,29,3])
+  number_e_matrix = np.zeros([100,100,29,29])
+
+  for run in range(2): #V2.0
+        print(run)
+        run_start_time = tm.time()
+        # Parallel call via poolen.map, first all the indata is merged into an array for all electrons (Nr=incycles)
+        valleys = [1+(x%6) for x in range(sv.incycles)] # repeating 0,1,2,3,4,5 list
+        Gammamax = [gmax_list[int(x%6)] for x in range(sv.incycles)] 
+        mapper = poolen.map(multi_run_wrap,list(zip(*[valleys,Gammamax])))  
+        resultlist = list(mapper)   #this is the outdata from inloop6 (fortran)
+        summed = [sum(x) for x in zip(*resultlist)] #outdata summed over the electrons
+        xtotinval = summed[0]      #xtotinval(n)= total distance travelled in valley n (n=1..6)
+        ttotinval = summed[1]      #ttotinval(n)= total time spent in valley n (n=1..6)
+        Ettot     = summed[2]      #Ettot(n)= energy integrated over time in valley n (n=1..6)  ???
+        xinttot   = summed[3]      #xinttot(n)= distance integrated over time in valley n (n=1..6)
+        xvtot     = summed[4]      #xvtot(n)= distance times velocity integrated over time in valley n (n=1..6) ???
+        jz2       = summed[5]      #jz2(n)= current  in valley n (n=1..6)  ???
+        run_end_time = tm.time()
+        print('Elapsed time scatt: ', run_end_time-run_start_time) 
+        #V2.0  sorterar ut alla positionenr för elektronerna
+
+        pos_i = np.zeros(bins_t*4) # zero the position vector etc. make sure that the format of the vectors is correct and all zero values are gone
+        for i in range(sv.incycles): # allt under är V2.0 
+            pos_i = np.array(resultlist[i][6]).reshape((bins_t,4),order='F')
+            resultlist[i][6] = pos_i[np.nonzero(pos_i[:,3]),:]
+        
+        pos_raw = np.array(np.hstack( (np.reshape(resultlist,sv.incycles*7)[6::7]))) 
+        pos_bins = [] 
+        pos,number_e = np.unique(np.floor(np.divide(pos_raw,[sv.length/bins_z,sv.length/bins_xy,sv.length/bins_xy,22e-9/bins_t])),
+             return_index=False, return_inverse=False, return_counts=True, axis=1) # kan gå snabbare om jag gör den för varje tidsteg
+        pos = np.reshape(pos,(number_e.size,4))
+        pos_raw = np.reshape(pos_raw,(-1,4))
+
+        ind_greater_zero = (number_e > 0) # ta bort alla små väden
+        pos = pos[ind_greater_zero ,:]
+        number_e   = number_e[ind_greater_zero]
+        pos_end = pos[(pos[:,0] > bins_z-1),:]
+        number_e_end = number_e[(pos[:,0] > bins_z-1)]
+##simulats that the electrons get stuck in Nv centers
+        part_e_Nv = 0.1 # part of electrons that hits Nv center
+        count = 0
+        k = 0
+        for i in range(pos_end[:,0].size):
+            for j in range(int(pos_end[i,3]),int(bins_t)):
+                count += 1
+        ## lägger till electroner till slutet the end 
+        pos_e_Nv = np.zeros([count,4])
+        number_e_Nv = np.zeros(count)
+        for i in range(pos_end[:,0].size):
+            for j in range(int(pos_end[i,3]),int(bins_t)):
+                pos_e_Nv[k,:] = [bins_z-1,pos_end[i,1],pos_end[i,2],j]
+                number_e_Nv[k] = part_e_Nv*number_e_end[i]
+                k += 1
+        pos = np.vstack((pos,pos_e_Nv))
+        number_e = np.append(number_e,number_e_Nv)
+###############################################################
+        ind_inside = ((pos[:,0] < bins_z) & (0<pos[:,0]) &
+            (pos[:,1]<=int((bins_xy-1)/2)) & 
+            (pos[:,1]>=-int((bins_xy-1)/2)) &  
+            (pos[:,2]<=int((bins_xy-1)/2)) & 
+            (pos[:,2]>=-int((bins_xy-1)/2))) 
+        pos = pos[ind_inside ,:]
+        number_e   = number_e[ind_inside]
+        ind_sort = np.lexsort((pos[:,0],pos[:,3]), axis=0)
+        pos = pos[ind_sort,:]
+        number_e   = number_e[ind_sort]
+        b_tid = tm.time()
+        ratio_add = 0.02
+        number_e_matrix  = ((1-ratio_add)*number_e_matrix + 
+            ratio_add*electron_smoothing(pos[:,0].size,pos,number_e))
+        run_start_time = tm.time()
+        print('Elapsed time number_e_matrix: ', run_start_time-b_tid) 
+####################################################################
+        e_pos_matrix_i = [number_e_matrix[x,:,:,:] for x in range(bins_t)]
+        mapper = poolen.map(Efind,list(zip(*[e_pos_matrix_i])))  
+        result_efield_pool = list(mapper)   #this is the outdata from inloop6 (fortran)
+        E_field = np.stack(result_efield_pool, axis=0)
+        #print(np.mean(E_field))
+        b_tid = tm.time()
+        print('Elapsed time E_field: ', b_tid-run_start_time) 
+########################################################################
+        raw_array_np = np.frombuffer(raw_array, dtype=np.float64) #.reshape(X_shape)
+        np.copyto(raw_array_np, np.reshape(E_field*1e8/sv.incycles, (1,-1),order='F' ) )
+        np.savetxt('Pos_end'+str(run)+'.txt',pos_raw)
+############################################################################    
+  np.savetxt('Pos_end.txt',pos_raw)
+  #np.savetxt('number_e_matrix.txt',np.reshape(number_e_matrix, (-1,1)))
+  #np.savetxt('pos_all.txt',np.reshape(pos, (-1,1)))
+  #np.savetxt('Pos_end'+'.txt',pos_raw)
+  plt.figure(20)
+  plt.imshow(number_e_matrix[40,:,:,:].sum(axis=1))
+  plt.figure(21)
+  plt.imshow(E_field[40,:,:,:,2].sum(axis=1))
+########################################################################################################################
+  end_time =tm.time()
+  print('Elapsed time: ', end_time-start_time)
+
+
+  plt.show()  
+  poolen.close() #close the paralell workers
+  poolen.join()
+#end mcrun
 def multi_run_wrap(a):    #collects all arguments for inloop6 into one (technicality to make paralell processing routine poolen.map work)
     """
     collects all arguments for inloop6 into one (technicality to make paralell 
@@ -28,15 +171,13 @@ def multi_run_wrap(a):    #collects all arguments for inloop6 into one (technica
     Parameters
     ----------
     a : list 
-    [length m, temp K, Efield V/m, bfield T, Xid, xiu,
-    tstop s, maxscats, intevally scatter 1 or 0, gmax=0, which vally 1-6]
+    [gmax, which vally 1-6]
         
     Returns
     -------
     : list
     [xtotinval,ttotinval,Ettot,xinttot,xvtot,jz2,Pos]
     """
-    #X_np      = np.frombuffer(Efield) # V2.0
     bins_z    = sv.bins_z
     bins_xy   = sv.bins_xy
     bins_t    = sv.bins_t          
@@ -83,7 +224,7 @@ def Efind(a):
     Parameters
     ----------
     a :list
-        [t_bin,z_bin,xy_bin,extend_number,electron_pos_matrix,L/W]
+        [electron_pos_matrix]
 
     Returns
     -------
@@ -96,207 +237,41 @@ def Efind(a):
     efieldfind(sv.bins_z,sv.bins_xy,sv.length/sv.width,*a,Efield)
     return(Efield)
 
-def electron_smoothing(bins_z,bins_t,bins_xy,n_n_s,Pos_size,Pos,N,M):
+def electron_smoothing(Pos_size,Pos,N):
+
     '''
     takes a list of all postions of the electrons and put them the right
     in a matrix form 
     
     Parameters
     ----------
-    bins_z : int
-        DESCRIPTION.
-    bins_t : int
-        DESCRIPTION.
-    bins_xy : int
-        DESCRIPTION.
-    n_n_s : int
-        DESCRIPTION.
     Pos_size : int
         number of uesed postions
     Pos : np.array
         [:,4] array with all the postions of electron
     N : np.array
         [:] number of electrons in each position
-    M : np.array
-        [n_n_s*2+1,n_n_s*2+1,n_n_s*2+1], describes the smoothing
+
 
     Returns
     -------
-    NN : np.array
+    e_number_matrix : np.array
     matrix which describes the simulated space with number of electrons 
     in each subspace
     
     '''    
 
-
-    NN  = np.zeros([sv.bins_t,sv.bins_z+n_n_s*2,bins_xy+n_n_s*2,bins_xy+n_n_s*2],order='F')
     pos  = np.zeros([sv.bins_t*sv.bins_z*sv.bins_xy*sv.bins_xy,4],order='F')
+    pos[:Pos_size,:] = Pos # fortran need to know the length beforehand
     n = np.zeros([sv.bins_t*sv.bins_z*sv.bins_xy*sv.bins_xy],order='F')
-    pos[:Pos_size,:] = Pos
     n[:Pos_size] = N
-    M = np.asfortranarray(M)
-    emuching(n_n_s,Pos_size,pos,n,NN,M)
-    return(NN)
+    e_number_matrix  = np.zeros([sv.bins_t,sv.bins_z,sv.bins_xy,sv.bins_xy],order='F')
+    emuching(Pos_size,pos,n,e_number_matrix)
+    return(e_number_matrix)
 
 def initProcess(share):
   global Efield
   Efield = share
-
-#@profile
-def mcrun():
-  '''
-  Monte Carlo simulation for electrons with ADP and intervalley scattering.
-  Set parameters between line 155 and 190.
-  Returns
-  -------
-  None.
-
-  '''
-
-  # create bins
-  bins_z  = sv.bins_z
-  bins_xy = sv.bins_xy
-  bins_t  = sv.bins_t    #number of temporal bins to record current data in # NEEDS  FIXING, NOW I HAVE TO SPECIFY BINS AT 3 DIFFERENT PLACES
-
-  #make a place to store the electric field vector V2.0
-  e_field = np.zeros(bins_t*bins_z*bins_xy**2*3)
-  raw_array = mp.RawArray('d', int(bins_t*bins_z*bins_xy**2*3))
-  raw_array_np = np.frombuffer(raw_array, dtype=np.float64) #.reshape(X_shape)
-  np.copyto(raw_array_np, e_field)
-
-  #define one parallel process for each cpu
-  workers = mp.cpu_count()    
-  poolen = mp.Pool(workers, initializer= initProcess, initargs = (raw_array,)) # V2.0
-
-####################################################
-  # calculates gmax for each vally
-  diffrent_cycles = 6
-  valleys = [1+(x%6) for x in range(diffrent_cycles)] # repeating 0,1,2,3,4,5 list
-  gmax_list = poolen.map(gmax,list(zip(*[valleys])))
-###################################################
-  start_time = tm.time()     #start counting cpu time
-  print('TL= ', sv.T_L, '   B= ', sv.B,'   U= ', sv.U,'   Xid= ', sv.Xid/sv.q,'   Xiu= ', sv.Xiu/sv.q) #to be able to follow the progress in the command window
-  jz2 = np.zeros(bins_t) # zero the current vector etc.
-  xtotinval = np.zeros(6); 
-  ttotinval = np.zeros(6); 
-  Ettot = np.zeros(6);
-  xinttot = np.zeros(6); 
-  xvtot = np.zeros(6)
-
-#############################################################################################################
-  def weird_division(n, d):
-      return n / d if d else 0
-  extend_matrix  = int(2)
-  smooth_matrix = np.zeros([extend_matrix*2+1,extend_matrix*2+1,extend_matrix*2+1])
-  smooth_matrix[extend_matrix,extend_matrix,extend_matrix] = 1
-
-
-  E_field = np.zeros([100,100,29,29,3])
-  e_pos_matrix = np.zeros([100,100+extend_matrix*2,29+extend_matrix*2,29+extend_matrix*2])
-
-  for run in range(2): #V2.0
-        print(run)
-        run_start_time = tm.time()
-        # Parallel call via poolen.map, first all the indata is merged into an array for all electrons (Nr=incycles)
-        valleys = [1+(x%6) for x in range(sv.incycles)] # repeating 0,1,2,3,4,5 list
-        Gammamax = [gmax_list[int(x%6)] for x in range(sv.incycles)] 
-        mapper = poolen.map(multi_run_wrap,list(zip(*[valleys,Gammamax])))  
-        resultlist = list(mapper)   #this is the outdata from inloop6 (fortran)
-        summed = [sum(x) for x in zip(*resultlist)] #outdata summed over the electrons
-        xtotinval = summed[0]      #xtotinval(n)= total distance travelled in valley n (n=1..6)
-        ttotinval = summed[1]      #ttotinval(n)= total time spent in valley n (n=1..6)
-        Ettot     = summed[2]      #Ettot(n)= energy integrated over time in valley n (n=1..6)  ???
-        xinttot   = summed[3]      #xinttot(n)= distance integrated over time in valley n (n=1..6)
-        xvtot     = summed[4]      #xvtot(n)= distance times velocity integrated over time in valley n (n=1..6) ???
-        jz2       = summed[5]      #jz2(n)= current  in valley n (n=1..6)  ???
-        run_end_time = tm.time()
-        print('Elapsed time scatt: ', run_end_time-run_start_time) 
-        #V2.0  sorterar ut alla positionenr för elektronerna
-
-        pos_i = np.zeros(bins_t*4) # zero the position vector etc. make sure that the format of the vectors is correct and all zero values are gone
-        for i in range(sv.incycles): # allt under är V2.0 
-            pos_i = np.array(resultlist[i][6]).reshape((bins_t,4),order='F')
-            resultlist[i][6] = pos_i[np.nonzero(pos_i[:,3]),:]
-        
-        pos_raw = np.array(np.hstack( (np.reshape(resultlist,sv.incycles*7)[6::7]))) 
-        pos_bins = [] 
-        pos,number_e = np.unique(np.floor(np.divide(pos_raw,[sv.length/bins_z,sv.length/bins_xy,sv.length/bins_xy,22e-9/bins_t])), return_index=False, return_inverse=False, return_counts=True, axis=1) # kan gå snabbare om jag gör den för varje tidsteg
-        pos = np.reshape(pos,(number_e.size,4))
-        pos_raw = np.reshape(pos_raw,(-1,4))
-
-        ind_greater_zero = (number_e > 0) # ta bort alla små väden
-        pos = pos[ind_greater_zero ,:]
-        number_e   = number_e[ind_greater_zero]
-        #print(number_e.size) 
-        pos_end = pos[(pos[:,0] > bins_z-1),:]
-        number_e_end = number_e[(pos[:,0] > bins_z-1)]
-#######################################################################
-        count = 0
-        for i in range(pos_end[:,0].size):
-            for j in range(int(pos_end[i,3]),int(bins_t)):
-                count += 1
-        ## lägger till electroner till slutet the end 
-        pos_e_Nv = np.zeros([count,4])
-        number_e_Nv = np.zeros(count)
-        part_e_Nv = 0.1 # part of electrons that hits Nv center
-        k = 0
-        for i in range(pos_end[:,0].size):
-            for j in range(int(pos_end[i,3]),int(bins_t)):
-                pos_e_Nv[k,:] = [bins_z-1,pos_end[i,1],pos_end[i,2],j]
-                number_e_Nv[k] = part_e_Nv*number_e_end[i]
-                k += 1
-        pos = np.vstack((pos,pos_e_Nv))
-        number_e = np.append(number_e,number_e_Nv)
-###############################################################
-        ind_inside = ((pos[:,0] < bins_z) & (0<pos[:,0]) &
-            (pos[:,1]<=int((bins_xy-1)/2)) & 
-            (pos[:,1]>=-int((bins_xy-1)/2)) &  
-            (pos[:,2]<=int((bins_xy-1)/2)) & 
-            (pos[:,2]>=-int((bins_xy-1)/2))) 
-        pos = pos[ind_inside ,:]
-        number_e   = number_e[ind_inside]
-        ind_sort = np.lexsort((pos[:,0],pos[:,3]), axis=0)
-        pos = pos[ind_sort,:]
-        number_e   = number_e[ind_sort]
-        b_tid = tm.time()
-        ratio_add = 0.02
-        e_pos_matrix  = ((1-ratio_add)*e_pos_matrix + 
-            ratio_add*electron_smoothing(bins_z,bins_t,bins_xy,extend_matrix,pos[:,0].size,pos,number_e,smooth_matrix))
-        run_start_time = tm.time()
-        print('Elapsed time e_pos_matrix: ', run_start_time-b_tid) 
-####################################################################
-        extend_matrix_i = [extend_matrix for x in range(bins_t)]
-        e_pos_matrix_i = [e_pos_matrix[x,:,:,:] for x in range(bins_t)]
-        mapper = poolen.map(Efind,list(zip(*[extend_matrix_i,e_pos_matrix_i])))  
-        result_efield_pool = list(mapper)   #this is the outdata from inloop6 (fortran)
-        E_field = np.stack(result_efield_pool, axis=0)
-        #print(np.mean(E_field))
-        b_tid = tm.time()
-        print('Elapsed time E_field: ', b_tid-run_start_time) 
-########################################################################
-        raw_array_np = np.frombuffer(raw_array, dtype=np.float64) #.reshape(X_shape)
-        np.copyto(raw_array_np, np.reshape(E_field*1e8/sv.incycles, (1,-1),order='F' ) )
-        np.savetxt('Pos_end'+str(run)+'.txt',pos_raw)
-############################################################################    
-  # nearest = np.argsort(np.sum((Y[:,np.newaxis, :]-Y[np.newaxis,:, :]) ** 2, axis=-1), axis=1) https://jakevdp.github.io/PythonDataScienceHandbook/02.08-sorting.html 
-  np.savetxt('Pos_end.txt',pos_raw)
-  #np.savetxt('e_pos_matrix.txt',np.reshape(e_pos_matrix, (-1,1)))
-  #np.savetxt('pos_all.txt',np.reshape(pos, (-1,1)))
-  #np.savetxt('Pos_end'+'.txt',pos_raw)
-  plt.figure(20)
-  plt.imshow(e_pos_matrix[40,:,:,:].sum(axis=1))
-  plt.figure(21)
-  plt.imshow(E_field[40,:,:,:,2].sum(axis=1))
-########################################################################################################################
-  end_time =tm.time()
-  print('Elapsed time: ', end_time-start_time)
-
-
-  plt.show()  
-  poolen.close() #close the paralell workers
-  poolen.join()
-#end mcrun
-
 def main():
     mcrun()
     
@@ -319,13 +294,13 @@ if __name__ == "__main__":
     #ind = np.lexsort((pos[:,0],pos[:,3]), axis=0) # borde vara på alla
     #pos = pos[ind,:]
     #number_e   = number_e[ind]
-    #e_pos_matrix = electron_smoothing(bins_z,bins_t,bins_xy,extend_matrix,pos[:,0].size,pos,N,smooth_matrix)
+    #number_e_matrix = electron_smoothing(bins_z,bins_t,bins_xy,extend_matrix,pos[:,0].size,pos,N,smooth_matrix)
 
     #T_m = [bins_t for x in range(bins_t)]     
     #Z_m = [bins_z for x in range(bins_t)]  
     #XY_m = [bins_xy for x in range(bins_t)]
     #n_n_m = [extend_matrix for x in range(bins_t)]
-    #NN_m = [e_pos_matrix[x,:,:,:] for x in range(bins_t)]
+    #NN_m = [number_e_matrix[x,:,:,:] for x in range(bins_t)]
     #ratio_m = [length/width for x in range(bins_t)]
 
     #mapper = poolen.map(Efind,list(zip(*[T_m,Z_m,XY_m,n_n_m,NN_m,ratio_m])))  
